@@ -1,0 +1,14 @@
+*.conf
+*.key
+*.pem
+.env
+.env.*
+*secret*.yaml
+*secret*.yml
+kubeconfig*
+*.sqlite*
+*.db
+*.m4b
+*.mp3
+*.torrent
+__pycache__/

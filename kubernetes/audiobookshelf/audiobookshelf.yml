@@ -1,0 +1,159 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: audiobookshelf
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: audiobookshelf-local-retain
+provisioner: rancher.io/local-path
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: config
+  namespace: audiobookshelf
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: audiobookshelf-local-retain
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: metadata
+  namespace: audiobookshelf
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: audiobookshelf-local-retain
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audiobooks
+  namespace: audiobookshelf
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: audiobookshelf-local-retain
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: podcasts
+  namespace: audiobookshelf
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: audiobookshelf-local-retain
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audiobookshelf
+  namespace: audiobookshelf
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: audiobookshelf
+  template:
+    metadata:
+      labels:
+        app: audiobookshelf
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: node02
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: audiobookshelf
+        image: ghcr.io/advplyr/audiobookshelf:2.37.1
+        env:
+        - name: PORT
+          value: '8080'
+        - name: TZ
+          value: America/New_York
+        ports:
+        - name: http
+          containerPort: 8080
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
+        readinessProbe:
+          tcpSocket:
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: metadata
+          mountPath: /metadata
+        - name: audiobooks
+          mountPath: /audiobooks
+        - name: podcasts
+          mountPath: /podcasts
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: config
+      - name: metadata
+        persistentVolumeClaim:
+          claimName: metadata
+      - name: audiobooks
+        persistentVolumeClaim:
+          claimName: audiobooks
+      - name: podcasts
+        persistentVolumeClaim:
+          claimName: podcasts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audiobookshelf
+  namespace: audiobookshelf
+spec:
+  selector:
+    app: audiobookshelf
+  ports:
+  - name: http
+    port: 80
+    targetPort: http

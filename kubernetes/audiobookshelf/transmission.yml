@@ -1,0 +1,203 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: transmission-config
+  namespace: audiobookshelf
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: audiobookshelf-local-retain
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transmission-defaults
+  namespace: audiobookshelf
+data:
+  settings.json: "{\n  \"download-dir\": \"/audiobooks\",\n  \"incomplete-dir\": \"\
+    /audiobooks/.incomplete\",\n  \"incomplete-dir-enabled\": true,\n  \"rename-partial-files\"\
+    : true,\n  \"rpc-enabled\": true,\n  \"rpc-bind-address\": \"127.0.0.1\",\n  \"\
+    rpc-whitelist-enabled\": true,\n  \"rpc-whitelist\": \"127.0.0.1\",\n  \"rpc-authentication-required\"\
+    : false,\n  \"port-forwarding-enabled\": false,\n  \"start-added-torrents\": true,\n\
+    \  \"umask\": 2\n}\n"
+  vpn-control.toml: '[[roles]]
+
+    name = "local-vpn-control"
+
+    routes = ["GET /v1/vpn/status", "PUT /v1/vpn/status"]
+
+    auth = "none"
+
+    '
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transmission
+  namespace: audiobookshelf
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: transmission
+  template:
+    metadata:
+      labels:
+        app: transmission
+      annotations:
+        kubectl.kubernetes.io/default-container: transmission
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: node02
+      dnsConfig:
+        nameservers:
+        - 127.0.0.1
+        searches: []
+        options:
+        - name: ndots
+          value: '1'
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: transmission
+        image: lscr.io/linuxserver/transmission:4.1.3-r0-ls363
+        command:
+        - /bin/sh
+        - -ec
+        args:
+        - "if [ ! -f /config/settings.json ]; then\n  cp /defaults/settings.json /config/settings.json\n\
+          fi\nmkdir -p /audiobooks/.incomplete\nexec /usr/bin/transmission-daemon\
+          \ --foreground --config-dir /config\n"
+        env:
+        - name: TRANSMISSION_HOME
+          value: /config
+        - name: TZ
+          value: America/New_York
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        readinessProbe:
+          exec:
+            command:
+            - /usr/bin/transmission-remote
+            - 127.0.0.1:9091
+            - --session-info
+          initialDelaySeconds: 5
+          periodSeconds: 30
+          timeoutSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /config
+        - name: defaults
+          mountPath: /defaults
+          readOnly: true
+        - name: audiobooks
+          mountPath: /audiobooks
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: transmission-config
+      - name: defaults
+        configMap:
+          name: transmission-defaults
+      - name: audiobooks
+        persistentVolumeClaim:
+          claimName: audiobooks
+      - name: surfshark-wireguard
+        secret:
+          secretName: surfshark-wireguard
+          defaultMode: 256
+      - name: tun-device
+        hostPath:
+          path: /dev/net/tun
+          type: CharDevice
+      dnsPolicy: None
+      initContainers:
+      - name: gluetun
+        image: qmcgaw/gluetun:v3.41.3
+        restartPolicy: Always
+        securityContext:
+          runAsNonRoot: false
+          runAsUser: 0
+          runAsGroup: 0
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+            add:
+            - NET_ADMIN
+        env:
+        - name: VPN_SERVICE_PROVIDER
+          value: custom
+        - name: VPN_TYPE
+          value: wireguard
+        - name: WIREGUARD_IMPLEMENTATION
+          value: kernelspace
+        - name: FIREWALL
+          value: 'on'
+        - name: DNS_ADDRESS
+          value: 127.0.0.1
+        - name: TZ
+          value: America/New_York
+        - name: HTTP_CONTROL_SERVER_ADDRESS
+          value: 127.0.0.1:8000
+        - name: PUID
+          value: '0'
+        - name: PGID
+          value: '0'
+        startupProbe:
+          exec:
+            command:
+            - /gluetun-entrypoint
+            - healthcheck
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        readinessProbe:
+          exec:
+            command:
+            - /gluetun-entrypoint
+            - healthcheck
+          periodSeconds: 10
+          timeoutSeconds: 5
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+        volumeMounts:
+        - name: surfshark-wireguard
+          mountPath: /gluetun/wireguard
+          readOnly: true
+        - name: tun-device
+          mountPath: /dev/net/tun
+        - name: defaults
+          mountPath: /gluetun/auth/config.toml
+          subPath: vpn-control.toml
+          readOnly: true
+        command:
+        - /bin/sh
+        - -ec
+        args:
+        - mkdir -p /tmp/gluetun; chmod 700 /tmp/gluetun; exec /gluetun-entrypoint
