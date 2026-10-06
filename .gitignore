@@ -1,8 +1,8 @@
-*.conf
-*.key
-*.pem
 .env
 .env.*
+*.key
+*.pem
+*.conf
 *secret*.yaml
 *secret*.yml
 kubeconfig*
@@ -10,5 +10,4 @@ kubeconfig*
 *.db
 *.m4b
 *.mp3
-*.torrent
 __pycache__/
